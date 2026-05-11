@@ -66,6 +66,7 @@ import okhttp3.Request;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.jose4j.jwt.JwtClaims;
+import org.jose4j.jwt.MalformedClaimException;
 import org.jose4j.jwt.consumer.InvalidJwtException;
 import org.jose4j.jwt.consumer.JwtConsumer;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -129,6 +130,7 @@ public class AzureSecurityRealm extends SecurityRealm {
     private static final int NOT_FOUND = 404;
     private static final int BAD_REQUEST = 400;
     public static final String CONVERTER_DISABLE_GRAPH_INTEGRATION = "disableGraphIntegration";
+    public static final String CONVERTER_USE_APP_ROLES = "useAppRoles";
     public static final String CONVERTER_SINGLE_LOGOUT = "singleLogout";
     public static final String CONVERTER_PROMPT_ACCOUNT = "promptAccount";
     public static final String CONVERTER_DOMAIN_HINT = "domainHint";
@@ -146,6 +148,7 @@ public class AzureSecurityRealm extends SecurityRealm {
     private boolean promptAccount;
     private boolean singleLogout;
     private boolean disableGraphIntegration;
+    private boolean useAppRoles;
     private String azureEnvironmentName = "Azure";
     private String credentialType = "Secret";
     private String domainHint = "";
@@ -315,6 +318,15 @@ public class AzureSecurityRealm extends SecurityRealm {
     @DataBoundSetter
     public void setDisableGraphIntegration(boolean disableGraphIntegration) {
         this.disableGraphIntegration = disableGraphIntegration;
+    }
+
+    public boolean isUseAppRoles() {
+        return useAppRoles;
+    }
+
+    @DataBoundSetter
+    public void setUseAppRoles(boolean useAppRoles) {
+        this.useAppRoles = useAppRoles;
     }
 
     @DataBoundSetter
@@ -517,12 +529,28 @@ public class AzureSecurityRealm extends SecurityRealm {
                 final AzureAdUser user;
                 user = AzureAdUser.createFromJwt(claims);
 
-                List<AzureAdGroup> groups = emptyList();
-                if (!isDisableGraphIntegration()) {
-                    groups = AzureCachePool.get(getAzureClient())
+                if (isUseAppRoles()) {
+                    // Extract roles from JWT — List<String> or null
+                    List<String> roles;
+                    try {
+                        roles = claims.getStringListClaimValue("roles");
+                    } catch (MalformedClaimException e) {
+                        LOGGER.log(Level.WARNING, "Failed to parse 'roles' claim from JWT", e);
+                        roles = null;
+                    }
+                    if (roles == null) {
+                        roles = emptyList();
+                    }
+                    user.setAuthoritiesFromAppRoles(roles, user.getUniqueName());
+                } else if (!isDisableGraphIntegration()) {
+                    List<AzureAdGroup> groups = AzureCachePool.get(getAzureClient())
                             .getBelongingGroupsByOid(user.getObjectID());
+                    user.setAuthorities(groups, user.getUniqueName());
+                } else {
+                    // disableGraphIntegration=true: skip Graph, fall back to
+                    // JWT "groups" claim OIDs via setAuthorities(emptyList(), ...)
+                    user.setAuthorities(emptyList(), user.getUniqueName());
                 }
-                user.setAuthorities(groups, user.getUniqueName());
                 LOGGER.info(String.format("Fetch user details with sub: %s***",
                         key.substring(0, CACHE_KEY_LOG_LENGTH)));
                 return user;
@@ -544,7 +572,7 @@ public class AzureSecurityRealm extends SecurityRealm {
 
             SecurityListener.fireAuthenticated2(userDetails);
 
-            if (!isDisableGraphIntegration()) {
+            if (!isDisableGraphIntegration() && !isUseAppRoles()) {
                 updateAvatar(userDetails, currentUser);
             }
 
@@ -656,6 +684,18 @@ public class AzureSecurityRealm extends SecurityRealm {
                 throw new UserMayOrMayNotExistException2("Can't find a user with no username");
             }
 
+            if (isUseAppRoles()) {
+                // In app roles mode, users are cached at login time.
+                // Non-interactive lookups (REST API) must find the user in cache.
+                AzureAdUser cached = caches.getIfPresent(username);
+                if (cached != null) {
+                    return cached;
+                }
+                LOGGER.log(Level.FINE, "loadUserByUsername: app roles mode, user ''{0}'' not in cache", username);
+                throw new UserMayOrMayNotExistException2(
+                        "Can't lookup a user in app roles mode — user must log in interactively first");
+            }
+
             if (isDisableGraphIntegration()) {
                 LOGGER.log(Level.FINE, "loadUserByUsername: graph integration disabled, cannot lookup user");
                 throw new UserMayOrMayNotExistException2("Can't lookup a user if graph integration is disabled");
@@ -733,6 +773,12 @@ public class AzureSecurityRealm extends SecurityRealm {
     @Override
     public GroupDetails loadGroupByGroupname2(String groupName, boolean fetchMembers) {
         LOGGER.log(Level.FINE, "loadGroupByGroupname2: looking up group ''{0}''", groupName);
+        if (isUseAppRoles()) {
+            LOGGER.log(Level.FINE, "loadGroupByGroupname2: app roles mode, cannot lookup group");
+            throw new UserMayOrMayNotExistException2(
+                    "Can't lookup a group in app roles mode — roles are embedded in the JWT");
+        }
+
         if (isDisableGraphIntegration()) {
             LOGGER.log(Level.FINE, "loadGroupByGroupname2: graph integration disabled, cannot lookup group");
             throw new UserMayOrMayNotExistException2("Can't lookup a group if graph integration is disabled");
@@ -858,6 +904,10 @@ public class AzureSecurityRealm extends SecurityRealm {
             writer.setValue(String.valueOf(realm.isDisableGraphIntegration()));
             writer.endNode();
 
+            writer.startNode(CONVERTER_USE_APP_ROLES);
+            writer.setValue(String.valueOf(realm.isUseAppRoles()));
+            writer.endNode();
+
             writer.startNode(CONVERTER_PROMPT_ACCOUNT);
             writer.setValue(String.valueOf(realm.isPromptAccount()));
             writer.endNode();
@@ -906,6 +956,9 @@ public class AzureSecurityRealm extends SecurityRealm {
                         break;
                     case CONVERTER_DISABLE_GRAPH_INTEGRATION:
                         realm.setDisableGraphIntegration(Boolean.parseBoolean(value));
+                        break;
+                    case CONVERTER_USE_APP_ROLES:
+                        realm.setUseAppRoles(Boolean.parseBoolean(value));
                         break;
                     case CONVERTER_PROMPT_ACCOUNT:
                         realm.setPromptAccount(Boolean.parseBoolean(value));
@@ -982,9 +1035,94 @@ public class AzureSecurityRealm extends SecurityRealm {
                                                     @QueryParameter final String credentialType,
                                                     @QueryParameter final String tenant,
                                                     @QueryParameter final String testObject,
-                                                    @QueryParameter final String azureEnvironmentName) {
-            LOGGER.log(Level.FINE, "doVerifyConfiguration: verifying with credentialType={0}, environment={1}",
-                    new Object[]{credentialType, azureEnvironmentName});
+                                                    @QueryParameter final String azureEnvironmentName,
+                                                    @QueryParameter final boolean useAppRoles) {
+            LOGGER.log(Level.FINE, "doVerifyConfiguration: verifying with credentialType={0}, environment={1}, useAppRoles={2}",
+                    new Object[]{credentialType, azureEnvironmentName, useAppRoles});
+
+            if (useAppRoles) {
+                // In app roles mode, verify the service principal can authenticate
+                // by attempting a real token acquisition. This validates:
+                // 1. The client ID and tenant are correct
+                // 2. The credential (secret/certificate/federated token) is valid
+                // No Graph API permissions are needed — we only acquire a token.
+                try {
+                    TokenRequestContext tokenRequest = new TokenRequestContext();
+                    tokenRequest.addScopes(AzureEnvironment.getGraphResource(azureEnvironmentName) + ".default");
+
+                    AccessToken token;
+                    switch (credentialType) {
+                        case "WorkloadIdentity":
+                            String tokenFilePath = System.getenv("AZURE_FEDERATED_TOKEN_FILE");
+                            if (tokenFilePath == null || tokenFilePath.isEmpty()) {
+                                return FormValidation.error(
+                                        "AZURE_FEDERATED_TOKEN_FILE environment variable is not set. "
+                                        + "Workload Identity requires a federated token file.");
+                            }
+                            token = new WorkloadIdentityCredentialBuilder()
+                                    .clientId(clientId)
+                                    .tenantId(tenant)
+                                    .tokenFilePath(tokenFilePath)
+                                    .authorityHost(getAuthorityHost(azureEnvironmentName))
+                                    .httpClient(HttpClientRetriever.get())
+                                    .build()
+                                    .getToken(tokenRequest)
+                                    .block();
+                            break;
+                        case "Certificate":
+                            if (Secret.toString(clientCertificate).isEmpty()) {
+                                return FormValidation.error("Please set a certificate");
+                            }
+                            File certFile = File.createTempFile("azure-ad-cert-", ".pem");
+                            try {
+                                Files.write(certFile.toPath(),
+                                        Secret.toString(clientCertificate).getBytes(StandardCharsets.UTF_8));
+                                token = new ClientCertificateCredentialBuilder()
+                                        .clientId(clientId)
+                                        .pemCertificate(certFile.getAbsolutePath())
+                                        .tenantId(tenant)
+                                        .sendCertificateChain(true)
+                                        .authorityHost(getAuthorityHost(azureEnvironmentName))
+                                        .httpClient(HttpClientRetriever.get())
+                                        .build()
+                                        .getToken(tokenRequest)
+                                        .block();
+                            } finally {
+                                certFile.delete();
+                            }
+                            break;
+                        case "Secret":
+                        default:
+                            if (Secret.toString(clientSecret).isEmpty()) {
+                                return FormValidation.error("Please set a secret");
+                            }
+                            token = new ClientSecretCredentialBuilder()
+                                    .clientId(clientId)
+                                    .clientSecret(Secret.toString(clientSecret))
+                                    .tenantId(tenant)
+                                    .authorityHost(getAuthorityHost(azureEnvironmentName))
+                                    .httpClient(HttpClientRetriever.get())
+                                    .build()
+                                    .getToken(tokenRequest)
+                                    .block();
+                            break;
+                    }
+
+                    if (token != null && token.getToken() != null) {
+                        return FormValidation.ok(
+                                "App Roles mode: Authentication successful. "
+                                + "Service principal authenticated via " + credentialType + ". "
+                                + "Graph API permissions are not required.");
+                    } else {
+                        return FormValidation.error("Authentication returned no token.");
+                    }
+                } catch (Exception ex) {
+                    return FormValidation.error(ex,
+                            "App Roles mode: Authentication failed. "
+                            + "Verify client ID, tenant, and credentials. Error: " + ex.getMessage());
+                }
+            }
+
             switch (credentialType) {
                 case "Secret":
                     if (Secret.toString(clientSecret).isEmpty()) {

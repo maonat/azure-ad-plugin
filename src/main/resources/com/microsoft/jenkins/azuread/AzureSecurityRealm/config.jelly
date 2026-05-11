@@ -66,6 +66,10 @@
             <f:entry title="${%Disable graph integration}" field="disableGraphIntegration">
                 <f:checkbox/>
             </f:entry>
+
+            <f:entry title="${%Use App Roles - no Graph API required}" field="useAppRoles">
+                <f:checkbox/>
+            </f:entry>
         </f:advanced>
 
         <f:entry title="Test user principal name or object id">
@@ -73,7 +77,7 @@
         </f:entry>
         <p>${%Save any configuration changes before configuring authorization settings}</p>
 
-        <f:validateButton title="Verify configuration" method="verifyConfiguration" progress="Verifying..." with="clientId,clientSecret,clientCertificate,credentialType,azureEnvironmentName,tenant,testObject"/>
+        <f:validateButton title="Verify configuration" method="verifyConfiguration" progress="Verifying..." with="clientId,clientSecret,clientCertificate,credentialType,azureEnvironmentName,tenant,testObject,useAppRoles"/>
 
     </f:block>
 </j:jelly>

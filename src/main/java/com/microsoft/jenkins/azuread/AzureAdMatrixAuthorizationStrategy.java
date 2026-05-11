@@ -180,7 +180,12 @@ public class AzureAdMatrixAuthorizationStrategy extends GlobalMatrixAuthorizatio
         if (!(realm instanceof AzureSecurityRealm)) {
             return null;
         }
-        GraphServiceClient<Request> graphClient = ((AzureSecurityRealm) realm).getAzureClient();
+        AzureSecurityRealm azureRealm = (AzureSecurityRealm) realm;
+        if (azureRealm.isUseAppRoles()) {
+            // App roles don't support Graph-based autocomplete
+            return null;
+        }
+        GraphServiceClient<Request> graphClient = azureRealm.getAzureClient();
 
         List<AzureObject> candidates = new ArrayList<>();
         LOGGER.info("search users with prefix: " + prefix);
@@ -266,7 +271,7 @@ public class AzureAdMatrixAuthorizationStrategy extends GlobalMatrixAuthorizatio
             SecurityRealm securityRealm = Jenkins.get().getSecurityRealm();
             if (securityRealm instanceof AzureSecurityRealm) {
                 AzureSecurityRealm azureSecurityRealm = (AzureSecurityRealm) securityRealm;
-                return azureSecurityRealm.isDisableGraphIntegration();
+                return azureSecurityRealm.isDisableGraphIntegration() || azureSecurityRealm.isUseAppRoles();
             }
 
             return true;

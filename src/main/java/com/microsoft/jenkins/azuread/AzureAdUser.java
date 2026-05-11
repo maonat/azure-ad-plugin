@@ -127,6 +127,25 @@ public final class AzureAdUser implements UserDetails {
         this.authorities = newAuthorities;
     }
 
+    /**
+     * Sets authorities from Entra ID app role strings (from the JWT {@code roles} claim).
+     * Each role string (e.g. {@code "jenkins-admin"}) becomes a {@link SimpleGrantedAuthority},
+     * functioning as a group in Jenkins' authorization model for job/folder/node-level permissions.
+     *
+     * @param appRoles         list of app role value strings from the JWT; may be empty
+     * @param userPrincipalName the user's UPN, added as an additional authority
+     */
+    public void setAuthoritiesFromAppRoles(List<String> appRoles, String userPrincipalName) {
+        List<GrantedAuthority> newAuthorities = new ArrayList<>();
+        for (String role : appRoles) {
+            newAuthorities.add(new SimpleGrantedAuthority(role));
+        }
+        newAuthorities.add(SecurityRealm.AUTHENTICATED_AUTHORITY2);
+        newAuthorities.add(new SimpleGrantedAuthority(objectID));
+        newAuthorities.add(new SimpleGrantedAuthority(userPrincipalName));
+        this.authorities = newAuthorities;
+    }
+
     @SuppressWarnings({"checkstyle:needbraces"})
     @Override
     public boolean equals(Object o) {

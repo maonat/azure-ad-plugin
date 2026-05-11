@@ -132,7 +132,7 @@ public class AzureAdAuthorizationMatrixProperty extends AuthorizationMatrixPrope
             SecurityRealm securityRealm = Jenkins.get().getSecurityRealm();
             if (securityRealm instanceof AzureSecurityRealm) {
                 AzureSecurityRealm azureSecurityRealm = (AzureSecurityRealm) securityRealm;
-                return azureSecurityRealm.isDisableGraphIntegration();
+                return azureSecurityRealm.isDisableGraphIntegration() || azureSecurityRealm.isUseAppRoles();
             }
 
             return true;

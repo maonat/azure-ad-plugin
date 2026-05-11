@@ -1,0 +1,31 @@
+<div>
+    <p>When enabled, Jenkins reads the <code>roles</code> claim from the Entra ID JWT token
+    instead of querying the Microsoft Graph API for group memberships.</p>
+
+    <p><strong>How it works:</strong></p>
+    <p>Each app role (e.g. <code>jenkins-admin</code>, <code>jenkins-deployer</code>) is mapped
+    to a Jenkins group authority. You can then use these role names in the permission matrix
+    at global, folder, job, and node level to control who can access what.</p>
+
+    <p><strong>Setup required in Azure:</strong></p>
+    <ol>
+        <li>In your App Registration &rarr; Manifest, define app roles in the
+            <code>appRoles</code> array (e.g. <code>"value": "jenkins-admin"</code>)</li>
+        <li>In Enterprise Applications &rarr; your app &rarr; Users and Groups,
+            assign users or groups to the defined app roles</li>
+    </ol>
+
+    <p><strong>Benefits:</strong></p>
+    <ul>
+        <li>No <code>GroupMember.Read.All</code> or <code>User.ReadBasic.All</code> permissions needed</li>
+        <li>Compatible with federated credentials / workload identity (no client secret)</li>
+        <li>Map Azure app roles to specific Jenkins jobs/folders for granular access control</li>
+    </ul>
+
+    <p><strong>Limitations:</strong></p>
+    <ul>
+        <li>User/group autocomplete in the permission matrix is not available &mdash;
+            type role names (e.g. <code>jenkins-deployer</code>) directly as GROUP entries</li>
+        <li>REST API / programmatic auth requires the user to have logged in interactively first</li>
+    </ul>
+</div>
